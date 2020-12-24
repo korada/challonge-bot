@@ -1,306 +1,141 @@
 require('dotenv').config();
 
-const _ = require('lodash');
 const express = require('express');
 const expressApp = express();
 
 const challonge = require('challonge');
-const Telegraf = require('telegraf');
+const TelegramBotApi = require('node-telegram-bot-api');
+const BotMessages = require('./helpers/messages');
+
+const Matches = require('./helpers/matches')
+const Players = require('./helpers/players')
 
 const API_TOKEN = process.env.telegram_bot_key;
-const PORT = process.env.PORT 
+const PORT = process.env.PORT
 
 const client = challonge.createClient({
   apiKey: process.env.challonge_api_key
 });
 
-const bot = new Telegraf(API_TOKEN);
+const matchHelper = new Matches(client)
+const playersHelper = new Players(client)
 
-bot.start((ctx) => ctx.reply('Welcome!'));
+const bot = new TelegramBotApi(API_TOKEN, { polling: true });
+const botMessages = new BotMessages(bot);
 
-bot.command('table', async (ctx) => {
+bot.onText(/\/start/, (msg) => {
+  botMessages.mainMenu(msg);
+});
+
+bot.onText(/\/table/, async (msg) => {
   // implement me
   // step 1 - get players
-  const players = await getPlayers();
-  const playerDetails = buildPlayerDetails(players);
+  const players = await playersHelper.getPlayers();
+  const playerDetails = playersHelper.buildPlayerDetails(players);
   // step 2 - get matches
-  const matches = await getMatches();
+  const matches = await matchHelper.getMatches();
   // step 3 - mashup info
-  const table = getTable(matches, playerDetails);
-  const sortedTable = sortTable(table);
-  const longestNameLength = findLongestNameLength(sortedTable);
-  const formattedTable = formatTable(sortedTable, longestNameLength);
-  ctx.replyWithMarkdown(formattedTable);
+  const table = matchHelper.getTable(matches, playerDetails);
+  const sortedTable = matchHelper.sortTable(table);
+  const longestNameLength = playersHelper.findLongestNameLength(sortedTable);
+  const formattedTable = matchHelper.formatTable(sortedTable, longestNameLength);
+  bot.sendMessage(msg.chat.id, formattedTable)
 });
 
-bot.command('results', async (ctx) => {
+bot.onText(/\/results/, async (msg) => {
   // implement me
-  const tournament = await getTournament();
-  let  result ="";
-  if(!isTournamentCompleted(tournament)){
-    result = "``` "+process.env.incomplete_msg+" ```";
+  const tournament = await matchHelper.getTournament();
+  let result = "";
+  if (!matchHelper.isTournamentCompleted(tournament)) {
+    result = "``` " + process.env.incomplete_msg + " ```";
   }
-  else{
+  else {
     // step 1 - get players
-    const players = await getPlayers();
-    const playerDetails = buildPlayerDetails(players);
+    const players = await playersHelper.getPlayers();
+    const playerDetails = playersHelper.buildPlayerDetails(players);
     // step 2 - get matches
-    const matches = await getMatches();
-     
+    const matches = await matchHelper.getMatches();
+
     // step 3 - mashup info
-    const table = getTable(matches, playerDetails);
-    const sortedTable = sortTable(table);
+    const table = matchHelper.getTable(matches, playerDetails);
+    const sortedTable = matchHelper.sortTable(table);
     //const longestNameLength = findLongestNameLength(sortedTable);
-     result = getChampions(sortedTable);
+    result = matchHelper.getChampions(sortedTable);
   }
-  ctx.replyWithMarkdown(result);
+  bot.sendMessage(msg.chat.id, result);
 });
 
-bot.command('next', async (ctx) => {
+bot.onText(/\/next/, async (msg) => {
   // implement me
   // step 1 - get players
-  const players = await getPlayers();
-  const matches = await getMatches();
+  const players = await playersHelper.getPlayers();
+  const matches = await matchHelper.getMatches();
 
   // step 3 - mashup info
-  const upcomingGames = getFixtures(players, matches);
-  const formattedFixtures = formatFixtures(upcomingGames);
-  ctx.replyWithMarkdown(formattedFixtures);
+  const upcomingGames = matchHelper.getFixtures(players, matches);
+  const formattedFixtures = matchHelper.formatFixtures(upcomingGames);
+  bot.sendMessage(msg.chat.id, formattedFixtures);
 });
 
-bot.launch();
-
-async function getPlayers() {
-  return new Promise((resolve, reject) => {
-    client.participants.index({
-      id: process.env.tournament_id,
-      callback: (err, players) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(players);
-        }
-      }
-    });
+bot.onText(/\/update/, async (msg) => {
+  const fixturesForUpdate = await matchHelper.getFixturesForUpdate();
+  const formattedKeyboard = fixturesForUpdate.map(a => {
+    return [{ 'text': a.key }]
   });
-}
+  botMessages.updateScoreKeyboard(msg, formattedKeyboard)
+});
 
-async function getMatches() {
-  return new Promise((resolve, reject) => { 
-    
-    client.matches.index({
-      id: process.env.tournament_id,
-      callback: function(error, matches){
-        if(error){
-          reject(error)
-        }else{
-          resolve(matches)
-        }
+const scores = {}
 
-      }
-    });
-
-
-  });
-  
-}
-
-
-function getChampions(sortedTable){
-   let results ="```"
-   results += "\n"
-   results += process.env.tournament_name
-   results += "\n"
-   results += "Champion: "+sortedTable[0].name;
-   results += "\n"
-   results += "Runner up: "+sortedTable[1].name;
-   results += "```"
-  return (results)
-}
-
-function buildPlayerDetails(players){
-  const playerDetails = {};
-  for(let index  of Object.keys(players)){
-    const player = players[index].participant
-    playerDetails[player.id] = { name: player.name.split('(')[0], w: 0, l: 0, d: 0, ga: 0, gf: 0, gd: 0, pts: 0 };
+bot.onText(/(\(H\))/, (msg) => {
+  if (!scores[msg.chat.id]) {
+    scores[msg.chat.id] = { home: "", away: "", step: "home", game: msg.text };
+    botMessages.homeScoreKeyboard(msg, msg.text);
+  } else {
   }
-  
-
-  return playerDetails;
-}
+});
 
 
-function getTable( matches, playerDetails){
-  for (let index of Object.keys(matches)){
-    const match = matches[index].match;
-    if(match.state == 'complete'){
-      const outcome = determineMatchoutcome(match)
-      let [firstPlayerGoals, secondPlayerGoals] = match.scoresCsv.split('-');
-      firstPlayerGoals = parseInt(firstPlayerGoals,10);
-      secondPlayerGoals = parseInt(secondPlayerGoals,10);
-      if(outcome.result === 'noTie'){
-        const winningGoals =  Math.max(firstPlayerGoals, secondPlayerGoals);
-        const losingGoals =  Math.min(firstPlayerGoals, secondPlayerGoals);
-        updateWinner(playerDetails, outcome.winnerId, winningGoals, losingGoals)
-        updateLoser(playerDetails, outcome.loserId, losingGoals, winningGoals)
-      }else{
-        updateTiedPlayers(playerDetails, outcome.firstPlayer, outcome.secondPlayer, firstPlayerGoals)
+bot.on('callback_query', async (msg) => {
+  try {
+    bot.answerCallbackQuery(msg.id);
+    let score = scores[msg.message.chat.id];
+    if (msg.data === 'nvm') {
+      scores[msg.message.chat.id] = null;
+      botMessages.removeInlineKeyboard(msg.message);
+      botMessages.mainMenu(msg.message);
+      return;
+    }
+    if (msg.data != 'update') {
+      if (score.step === "home") {
+        score.home = score.home + msg.data;
+      } else {
+        score.away = score.away + msg.data;
+      }
+    }
+    else {
+      if (score.step === "home") {
+        score.step = "away";
+        botMessages.removeInlineKeyboard(msg.message);
+        botMessages.awayScoreKeyboard(msg.message, score.game);
+      }
+      else if (score.step === "away") {
+        let games = await (await matchHelper.getFixturesForUpdate()).map(a => {
+          if (a.key === score.game) {
+            return a
+          }
+        });
+        await matchHelper.updateScore(games[0].value, score.home, score.away, games[0].homeId, games[0].awayId);
+        delete scores[msg.message.chat.id];
+        botMessages.removeInlineKeyboard(msg.message);
+        botMessages.updatedScoreMessage(msg.message);
       }
     }
   }
-  return playerDetails;
-}
-
-function formatTable(sortedTable, longestNameLength){
-  let formattedTable = '```';
-  formattedTable += '|  player  |w-d-l|gf|ga|pt|';
-  formattedTable += "\n";
-  formattedTable += '---------------------------';
-  formattedTable += "\n";
-  sortedTable.forEach((playerDetails)=>{
-    formattedTable += '|';
-    formattedTable +=  [playerDetails.name.padEnd(longestNameLength,' '), playerDetails.w+'-'+playerDetails.d+'-'+playerDetails.l, padInt(playerDetails.gf), padInt(playerDetails.ga), padInt(playerDetails.pts)].join('|');
-    formattedTable += '|';
-    formattedTable += "\n";
-  });
-  formattedTable += '```';
-  return formattedTable;
-}
-
-function determineMatchoutcome(match){
-  
-
-  const outcome = { winnerId : null, loserId : null, result : '', firstPlayer : null, secondPlayer : null}
-  if(match.winnerId != null){
-    outcome.winnerId = match.winnerId;
-    outcome.loserId = match.loserId;
-    outcome.result = 'noTie';
-  }else{
-    outcome.firstPlayer = match.player1Id;
-    outcome.secondPlayer = match.player2Id;
-    outcome.result = 'tie';
+  catch (ex) {
+    console.log(ex)
   }
-
-  return outcome;
-}
-
-function updatePlayerDetails(playerDetails, playerId, goalsFor, goalsAgainst, win, draw, loss, goalsDiff, points){
-  const currPlayer = playerDetails[playerId];
-  currPlayer.gf += goalsFor;
-  currPlayer.ga += goalsAgainst;
-  currPlayer.w += win;
-  currPlayer.d += draw;
-  currPlayer.l += loss;
-  currPlayer.gd += goalsDiff;
-  currPlayer.pts += points;
-}
-
-
-function updateWinner(playerDetails, playerId, goalsFor, goalsAgainst){
-  updatePlayerDetails(playerDetails, playerId, goalsFor, goalsAgainst, 1, 0, 0, (goalsFor-goalsAgainst), 3);
-
-}
-
-function updateLoser(playerDetails, playerId, goalsFor, goalsAgainst){
-  updatePlayerDetails(playerDetails, playerId, goalsFor, goalsAgainst, 0, 0, 1, (goalsFor-goalsAgainst), 0);
-}
-
-function updateTiedPlayers(playerDetails, firstPlayerId, secondPlayerId, goals){
-  updatePlayerDetails(playerDetails, firstPlayerId, goals, goals, 0, 1, 0, 0, 1);
-  updatePlayerDetails(playerDetails, secondPlayerId, goals, goals, 0, 1, 0, 0, 1);
-}
-
-function sortTable(table){
-  let tableValues =Object.values(table)
-  let sortedTable = _.orderBy(tableValues, ['pts', 'gd', 'gf'], ['desc', 'desc', 'desc'] ) 
-  return sortedTable;
-
-}
-
-function findLongestNameLength(playerDetails){
-  let longest = 0; 
-  playerDetails.forEach((player) => {
-    longest =Math.max(player.name.length, longest);
-  })
-  return longest;
-
-}
-
-function padInt(number) {
-  return (number < 10 ? '0' : '') + number
-}
-
-
-function getFixtures(players, matches){
-  let fixtures = [];
-  let i =0
-  for (let index of Object.keys(matches)){
-    const match = matches[index].match;
-    if(i<6 && match.state == 'open' ){
-      const firstPlayerName = getPlayerName(players, match.player1Id);
-      const secondPlayerName = getPlayerName(players, match.player2Id);
-      fixtures.push({home:firstPlayerName, away: secondPlayerName, round: match.round });
-      i++
-    }
-  }
-   return fixtures;
-}
-
-function getPlayerName(players, pId){
-  let playerName = ''
-  for(let index  of Object.keys(players)){
-    const player = players[index].participant
-    if(player.id == pId){
-      playerName = player.name.split('(')[0];
-    }
-  }  
-  return playerName;
-}
-
-function formatFixtures(upcomingGames){
-  let formattedFixtures = '```';
-  if(upcomingGames){
-    formattedFixtures += '  Upcoming Matches          ';
-  formattedFixtures += "\n";
-  formattedFixtures += '---------------------------';
-  formattedFixtures += "\n";
-  
-   upcomingGames.forEach((game) =>{
-    formattedFixtures += ['R'+game.round+'-'+game.home+'(H): '+game.away ];
-    formattedFixtures += "\n"
-    
-  });
-    
-  }else{
-    formattedFixtures += 'Tournament Finished!'
-  }
-   
-  formattedFixtures += '```';
-  return formattedFixtures;
-}
-
-//check if tournament completed or in progress
-function isTournamentCompleted(tournament){
-  console.log(tournament.tournament.progressMeter);
-  return tournament.tournament.progressMeter == 100
-}
-async function getTournament(){
-  return new Promise((resolve, reject) => {
-    client.tournaments.show({
-     id: process.env.tournament_id,
-     
-      callback: (err, tournament) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(tournament);
-        }
-      }
-    });
-  });
-}
-
-
+})
 
 // and at the end just start server on PORT
 expressApp.get('/', (req, res) => {

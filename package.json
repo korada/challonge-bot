@@ -4,6 +4,9 @@
   "description": "challonge soccer bot for telegram",
   "main": "index.js",
   "github": "https://github.com/appikonda/challonge-bot",
+  "engines": {
+    "node": ">=12"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
@@ -16,7 +19,10 @@
     "dotenv": "^8.2.0",
     "express": "^4.17.1",
     "lodash": "^4.17.15",
+    "node-telegram-bot-api": "^0.51.0",
     "nodemon": "^2.0.1",
-    "telegraf": "^3.33.3"
+    "telegraf": "^3.33.3",
+    "telegram-keyboard": "^2.1.6",
+    "uuid": "^8.3.2"
   }
 }

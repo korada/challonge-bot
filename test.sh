@@ -1,0 +1,4 @@
+export challonge_api_key=TmpTQRdIq2AliAmbw47Q5Lh3qVnBtFZlw8rEkbp2
+export PORT=4321
+export telegram_bot_key=1437142168:AAGYF9P507l2_NDFYo5ktA5bijX_ij0iGnM
+export tournament_id=yeuo0d6e
